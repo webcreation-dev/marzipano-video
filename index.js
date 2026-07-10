@@ -107,12 +107,12 @@
     };
   });
 
-  // Configuration de l'animation vidéo (Mode TikTok - Optimisé)
+  // Configuration de l'animation vidéo (Mode TikTok - Ralenti)
   var videoAnimationConfig = {
-    duration: 4000,         // Cycle de 4 secondes (équilibre vitesse/chargement)
-    yawSpeed: 2.0,          // ROTATION RAPIDE mais pas trop (1.6 rad/sec = ~90°/sec)
-    pitchVariation: 0.15,   // Mouvements verticaux prononcés
-    fovVariation: 0.10,     // Zoom dynamique visible
+    duration: 5000,         // Cycle de 5 secondes
+    yawSpeed: 1.5,          // ROTATION plus douce (1.2 rad/sec = ~70°/sec)
+    pitchVariation: 0.12,   // Mouvements verticaux modérés
+    fovVariation: 0.08,     // Zoom subtil
     idleDelay: 2000,        // Reprise rapide après 2 secondes
     useEasing: false,       // Pas d'easing = mouvements plus brusques
     movementType: 'continuous',
