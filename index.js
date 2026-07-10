@@ -246,27 +246,211 @@
   }
 
   var autoSwitchTimer = null;
+  var lastYaw = null;              // Dernière position yaw
+  var rotationAccumulated = 0;     // Distance totale parcourue en radians
+  var visitedScenes = [];          // Historique des pièces visitées
+  var lastHotspotCheck = 0;        // Timestamp du dernier check
+  var lastChosenHotspotIndex = -1; // Dernier hotspot choisi
+  var sceneStartTime = 0;          // Timestamp de début dans la scène actuelle
+
+  // Fonction pour vérifier si on est proche d'un hotspot
+  function isNearHotspot(currentYaw, hotspotYaw, threshold) {
+    // Normaliser les angles entre -PI et PI
+    var diff = Math.abs(currentYaw - hotspotYaw);
+    if (diff > Math.PI) {
+      diff = 2 * Math.PI - diff;
+    }
+    return diff < threshold;
+  }
+
+  // Fonction pour choisir intelligemment le meilleur hotspot
+  function chooseBestHotspot(currentScene, currentYaw, threshold) {
+    var hotspots = currentScene.data.linkHotspots;
+    if (hotspots.length === 0) return null;
+
+    // Filtrer les hotspots proches de la position actuelle
+    var nearbyHotspots = [];
+    for (var i = 0; i < hotspots.length; i++) {
+      if (isNearHotspot(currentYaw, hotspots[i].yaw, threshold)) {
+        nearbyHotspots.push({ hotspot: hotspots[i], index: i });
+      }
+    }
+
+    // Si aucun hotspot proche, retourner null
+    if (nearbyHotspots.length === 0) return null;
+
+    // Stratégie 1 : Priorité aux pièces NON VISITÉES
+    for (var j = 0; j < nearbyHotspots.length; j++) {
+      var targetId = nearbyHotspots[j].hotspot.target;
+      if (visitedScenes.indexOf(targetId) === -1) {
+        // Pièce jamais visitée, on y va !
+        lastChosenHotspotIndex = nearbyHotspots[j].index;
+        return nearbyHotspots[j].hotspot;
+      }
+    }
+
+    // Stratégie 2 : Toutes les pièces proches ont été visitées
+    // Alterner entre les différentes flèches pour explorer différents chemins
+    if (nearbyHotspots.length > 1) {
+      // Trouver un hotspot différent du dernier choisi
+      for (var k = 0; k < nearbyHotspots.length; k++) {
+        if (nearbyHotspots[k].index !== lastChosenHotspotIndex) {
+          lastChosenHotspotIndex = nearbyHotspots[k].index;
+          return nearbyHotspots[k].hotspot;
+        }
+      }
+    }
+
+    // Stratégie 3 : Par défaut, prendre le premier hotspot proche
+    lastChosenHotspotIndex = nearbyHotspots[0].index;
+    return nearbyHotspots[0].hotspot;
+  }
+
+  // Fonction pour choisir un hotspot sans condition de proximité (fallback)
+  function chooseBestHotspotNoProximity(currentScene) {
+    var hotspots = currentScene.data.linkHotspots;
+    if (hotspots.length === 0) return null;
+
+    // Priorité 1 : Pièce non visitée
+    for (var i = 0; i < hotspots.length; i++) {
+      if (visitedScenes.indexOf(hotspots[i].target) === -1) {
+        return hotspots[i];
+      }
+    }
+
+    // Priorité 2 : Alterner entre les hotspots
+    if (hotspots.length > 1) {
+      var nextIndex = (lastChosenHotspotIndex + 1) % hotspots.length;
+      lastChosenHotspotIndex = nextIndex;
+      return hotspots[nextIndex];
+    }
+
+    // Par défaut : premier hotspot
+    return hotspots[0];
+  }
+
+  // Fonction pour détecter les rotations et changer de pièce sur hotspot
+  function checkAutoSwitch() {
+    if (!videoAnimation || !videoAnimation.isPlaying || videoAnimation.userInteracted) {
+      return;
+    }
+
+    var currentView = viewer.view();
+    if (!currentView) return;
+
+    var currentYaw = currentView.yaw();
+    var currentScene = scenes[currentSceneIndex];
+
+    // Accumuler la rotation (en gérant correctement le passage -PI/+PI)
+    if (lastYaw !== null) {
+      var yawDiff = currentYaw - lastYaw;
+
+      // Si le saut est très grand (> PI), c'est qu'on a passé la frontière -PI/+PI
+      // Dans ce cas, on calcule la vraie distance dans l'autre sens
+      if (Math.abs(yawDiff) > Math.PI) {
+        // Passage de frontière : calculer la vraie distance
+        if (yawDiff > 0) {
+          yawDiff = yawDiff - (2 * Math.PI);
+        } else {
+          yawDiff = yawDiff + (2 * Math.PI);
+        }
+      }
+
+      rotationAccumulated += Math.abs(yawDiff);
+    }
+    lastYaw = currentYaw;
+
+    var now = Date.now();
+    var timeInScene = now - sceneStartTime;
+
+    // SÉCURITÉ : Après 15 secondes dans la même pièce, forcer le changement
+    var maxTimeInScene = 15000; // 15 secondes max
+    var forceChange = timeInScene > maxTimeInScene;
+
+    // DEBUG : Afficher la rotation accumulée (seulement toutes les 500ms)
+    if (now - lastHotspotCheck > 500) {
+      var rotationDegrees = (rotationAccumulated * 180 / Math.PI).toFixed(0);
+      var currentSceneName = currentScene.data.name;
+      console.log('[' + currentSceneName + '] Rotation: ' + rotationDegrees + '° | Temps: ' + (timeInScene/1000).toFixed(1) + 's | isPlaying: ' + videoAnimation.isPlaying + ' | userInteracted: ' + videoAnimation.userInteracted);
+    }
+
+    // Après avoir tourné d'au moins 2.5*PI radians (450° = 1 tour + 1/4), chercher un hotspot
+    // On met plus que 360° pour être SÛR d'avoir fait un tour complet
+    if ((rotationAccumulated >= 2.5 * Math.PI || forceChange) && currentScene.data.linkHotspots.length > 0) {
+      // Vérifier seulement toutes les 150ms pour éviter les checks trop fréquents
+      if (now - lastHotspotCheck < 150) {
+        requestAnimationFrame(checkAutoSwitch);
+        return;
+      }
+      lastHotspotCheck = now;
+
+      var bestHotspot = null;
+
+      // Si on force le changement (timeout), ne pas vérifier la proximité
+      if (forceChange) {
+        bestHotspot = chooseBestHotspotNoProximity(currentScene);
+      } else {
+        // Seuil de détection réduit pour plus de précision (changement pile sur flèche)
+        var threshold = 0.4; // ~23 degrés de tolérance (plus précis)
+
+        // Choisir intelligemment le prochain hotspot
+        bestHotspot = chooseBestHotspot(currentScene, currentYaw, threshold);
+
+        // FALLBACK : Si on a fait plus d'un tour et demi (3*PI) et toujours rien trouvé
+        // Forcer le changement vers n'importe quel hotspot intelligent
+        if (!bestHotspot && rotationAccumulated >= 3 * Math.PI) {
+          bestHotspot = chooseBestHotspotNoProximity(currentScene);
+        }
+      }
+
+      if (bestHotspot) {
+        var targetScene = findSceneById(bestHotspot.target);
+        if (targetScene) {
+          // Ajouter la pièce actuelle à l'historique AVANT de vérifier
+          var currentSceneId = currentScene.data.id;
+          if (visitedScenes.indexOf(currentSceneId) === -1) {
+            visitedScenes.push(currentSceneId);
+          }
+
+          // Si on a visité toutes les pièces, réinitialiser l'historique
+          if (visitedScenes.length >= scenes.length) {
+            visitedScenes = [];
+          }
+
+          // Changer de pièce !
+          rotationAccumulated = 0;
+          lastYaw = null;
+          sceneStartTime = Date.now();
+          switchScene(targetScene);
+          return;
+        }
+      }
+    }
+
+    // Continuer à vérifier
+    requestAnimationFrame(checkAutoSwitch);
+  }
 
   function startAutoSwitchTimer() {
     stopAutoSwitchTimer();
-    if (videoAnimationConfig.autoSwitchDelay > 0) {
-      autoSwitchTimer = setTimeout(function() {
-        if (videoAnimation && videoAnimation.isPlaying && !videoAnimation.userInteracted) {
-          var nextIndex = (currentSceneIndex + 1) % scenes.length;
-          switchScene(scenes[nextIndex]);
-        } else if (videoAnimation && videoAnimation.userInteracted) {
-          // Relancer le timer si l'utilisateur a la main
-          startAutoSwitchTimer();
-        }
-      }, videoAnimationConfig.autoSwitchDelay);
-    }
+    // Réinitialiser les compteurs de rotation
+    rotationAccumulated = 0;
+    lastYaw = null;
+    lastHotspotCheck = 0;
+    sceneStartTime = Date.now();
+
+    // NE PAS ajouter la pièce actuelle à l'historique au démarrage
+    // Elle sera ajoutée quand on la quitte
+
+    // Démarrer la boucle de vérification continue
+    requestAnimationFrame(checkAutoSwitch);
   }
 
   function stopAutoSwitchTimer() {
-    if (autoSwitchTimer) {
-      clearTimeout(autoSwitchTimer);
-      autoSwitchTimer = null;
-    }
+    // Réinitialiser les compteurs
+    rotationAccumulated = 0;
+    lastYaw = null;
+    sceneStartTime = 0;
   }
 
   function startAutorotate() {
