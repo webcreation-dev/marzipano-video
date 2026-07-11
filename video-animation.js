@@ -239,7 +239,7 @@
 
     // MOUVEMENTS BRUSQUES VERTICAUX (comme si quelqu'un bouge son téléphone)
     // Combinaison de plusieurs fréquences pour un mouvement imprévisible
-    var fastShake = Math.sin(progress * Math.PI * 12) * 0.03; // Petits tremblements rapides
+    var fastShake = Math.sin(progress * Math.PI * 12) * 0.03 * (config.pitchVariation > 0 ? 1 : 0); // Petits tremblements rapides
     var mediumMove = Math.sin(progress * Math.PI * 6) * config.pitchVariation * 0.4; // Mouvements moyens
     var slowSweep = Math.sin(progress * Math.PI * 2) * config.pitchVariation * 0.6; // Balayage lent
 
