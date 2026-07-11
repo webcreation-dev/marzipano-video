@@ -245,293 +245,82 @@
     sceneListToggleElement.classList.toggle('enabled');
   }
 
-  var autoSwitchTimer = null;
-  var lastYaw = null;              // Dernière position yaw
-  var rotationAccumulated = 0;     // Distance totale parcourue en radians
-  var visitedScenes = [];          // Historique des pièces visitées
-  var exploredPaths = [];          // Chemins explorés : [{from: "id", to: "id"}, ...]
-  var lastHotspotCheck = 0;        // Timestamp du dernier check
-  var autoSwitchStartTime = 0;     // Timestamp de début dans la scène actuelle
+  // Configuration et initialisation AutoExplorer
+  var autoExplorer = null;
 
-  // Fonction pour vérifier si on est proche d'un hotspot
-  function isNearHotspot(currentYaw, hotspotYaw, threshold) {
-    // Normaliser les angles entre -PI et PI
-    var diff = Math.abs(currentYaw - hotspotYaw);
-    if (diff > Math.PI) {
-      diff = 2 * Math.PI - diff;
-    }
-    return diff < threshold;
-  }
+  function initAutoExplorer() {
+    if (autoExplorer) return; // Déjà initialisé
 
-  // Fonction pour vérifier si un chemin a déjà été exploré
-  function hasExploredPath(fromId, toId) {
-    for (var i = 0; i < exploredPaths.length; i++) {
-      if (exploredPaths[i].from === fromId && exploredPaths[i].to === toId) {
-        return true;
-      }
-    }
-    return false;
-  }
+    var autoExplorerConfig = {
+      rotationThreshold: 450,
+      hotspotTolerance: 69,
+      timeout: 15000,
+      startingSceneId: '0-salon',
+      videoAnimation: videoAnimation,
+      enableLogging: true,
+      onSceneSwitch: function(from, to) {
+        console.log('→ Changement: ' + from + ' → ' + to);
+        // Appeler switchScene pour mettre à jour l'UI
+        var targetScene = scenes.find(function(s) { return s.data.id === to; });
+        if (targetScene) {
+          currentSceneIndex = scenes.indexOf(targetScene);
+          targetScene.view.setParameters(targetScene.data.initialViewParameters);
+          targetScene.scene.switchTo();
 
-  // Fonction pour marquer un chemin comme exploré
-  function markPathExplored(fromId, toId) {
-    if (!hasExploredPath(fromId, toId)) {
-      exploredPaths.push({from: fromId, to: toId});
-      console.log('📝 Chemin exploré: ' + fromId + ' → ' + toId);
-    }
-  }
+          // Réinitialiser la vue initiale pour la nouvelle scène
+          if (videoAnimation) {
+            videoAnimation.initialView = {
+              yaw: targetScene.data.initialViewParameters.yaw,
+              pitch: targetScene.data.initialViewParameters.pitch,
+              fov: targetScene.data.initialViewParameters.fov
+            };
+          }
 
-  // Fonction pour vérifier si une scène a des flèches non explorées
-  function hasUnexploredArrows(sceneId) {
-    var scene = scenes.find(function(s) { return s.data.id === sceneId; });
-    if (!scene) return false;
-
-    var hotspots = scene.data.linkHotspots;
-    for (var i = 0; i < hotspots.length; i++) {
-      if (!hasExploredPath(sceneId, hotspots[i].target)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Fonction pour trouver une pièce avec des flèches non explorées (pour backtracking)
-  function findRoomWithUnexploredArrows() {
-    // Stratégie 1 : Priorité à Salon (point de départ principal)
-    if (hasUnexploredArrows('0-salon')) {
-      return '0-salon';
-    }
-
-    // Stratégie 2 : Chercher dans l'ordre de visite des pièces
-    for (var i = 0; i < visitedScenes.length; i++) {
-      if (hasUnexploredArrows(visitedScenes[i])) {
-        return visitedScenes[i];
-      }
-    }
-
-    // Stratégie 3 : Chercher dans toutes les pièces
-    for (var j = 0; j < scenes.length; j++) {
-      var sceneId = scenes[j].data.id;
-      if (hasUnexploredArrows(sceneId)) {
-        return sceneId;
-      }
-    }
-
-    return null; // Tous les chemins explorés
-  }
-
-  // Fonction centralisée pour changer de scène (par ID)
-  function switchToScene(targetId) {
-    // Trouver l'index de la scène cible
-    for (var i = 0; i < scenes.length; i++) {
-      if (scenes[i].data.id === targetId) {
-        currentSceneIndex = i;
-        break;
-      }
-    }
-
-    // Ajouter à l'historique des pièces visitées
-    if (visitedScenes.indexOf(targetId) === -1) {
-      visitedScenes.push(targetId);
-    }
-
-    // Changer de scène (appelle la fonction existante)
-    switchScene(scenes[currentSceneIndex]);
-
-    // Redémarrer le tracking de rotation
-    rotationAccumulated = 0;
-    lastYaw = null;
-    autoSwitchStartTime = Date.now();
-
-    console.log('📍 Pièces visitées: ' + visitedScenes.length + '/' + scenes.length);
-  }
-
-  // Fonction pour réinitialiser l'exploration si cycle complet
-  function resetExplorationIfComplete() {
-    // Calculer le nombre total de chemins possibles
-    var totalPaths = 0;
-    for (var i = 0; i < scenes.length; i++) {
-      totalPaths += scenes[i].data.linkHotspots.length;
-    }
-
-    // Si tous les chemins explorés → reset
-    if (exploredPaths.length >= totalPaths) {
-      console.log('✅ Tous les chemins explorés (' + exploredPaths.length + '/' + totalPaths + ') - RESET');
-      exploredPaths = [];
-      visitedScenes = [];
-
-      // Retour au Salon pour recommencer
-      switchToScene('0-salon');
-    }
-  }
-
-  // Fonction pour choisir intelligemment le meilleur hotspot avec support backtracking
-  function chooseBestHotspotWithBacktracking(currentScene, currentYaw, threshold) {
-    var hotspots = currentScene.data.linkHotspots;
-    var currentSceneId = currentScene.data.id;
-    var nearbyHotspots = [];
-
-    // Étape 1 : Trouver les flèches proches (dans la vue actuelle)
-    for (var i = 0; i < hotspots.length; i++) {
-      var hotspot = hotspots[i];
-      if (isNearHotspot(currentYaw, hotspot.yaw, threshold)) {
-        nearbyHotspots.push(hotspot);
-      }
-    }
-
-    // Étape 2 : Parmi les flèches proches, choisir une flèche NON explorée
-    for (var j = 0; j < nearbyHotspots.length; j++) {
-      var hotspot2 = nearbyHotspots[j];
-      if (!hasExploredPath(currentSceneId, hotspot2.target)) {
-        return {hotspot: hotspot2, needsBacktrack: false};
-      }
-    }
-
-    // Étape 3 : Aucune flèche proche → vérifier si besoin de backtrack
-    // Si toutes les flèches de cette pièce sont explorées → BACKTRACK
-    var allExplored = true;
-    for (var k = 0; k < hotspots.length; k++) {
-      if (!hasExploredPath(currentSceneId, hotspots[k].target)) {
-        allExplored = false;
-        break;
-      }
-    }
-
-    if (allExplored) {
-      // BACKTRACK : trouver une pièce avec flèches non explorées
-      var backtrackTarget = findRoomWithUnexploredArrows();
-      if (backtrackTarget) {
-        console.log('🔙 BACKTRACK nécessaire vers : ' + backtrackTarget);
-        return {
-          hotspot: null,
-          needsBacktrack: true,
-          backtrackTarget: backtrackTarget
-        };
-      }
-    }
-
-    return null; // Pas de changement nécessaire
-  }
-
-  // Fonction pour détecter les rotations et changer de pièce sur hotspot (avec backtracking)
-  function checkAutoSwitch() {
-    if (!videoAnimation || !videoAnimation.isPlaying || videoAnimation.userInteracted) {
-      requestAnimationFrame(checkAutoSwitch);
-      return;
-    }
-
-    var currentView = viewer.view();
-    if (!currentView) {
-      requestAnimationFrame(checkAutoSwitch);
-      return;
-    }
-
-    var currentYaw = currentView.yaw();
-    var now = Date.now();
-
-    // Accumuler la rotation (en gérant correctement le passage -PI/+PI)
-    if (lastYaw !== null) {
-      var yawDiff = currentYaw - lastYaw;
-      if (Math.abs(yawDiff) > Math.PI) {
-        yawDiff = yawDiff > 0 ? yawDiff - 2*Math.PI : yawDiff + 2*Math.PI;
-      }
-      rotationAccumulated += Math.abs(yawDiff);
-    }
-    lastYaw = currentYaw;
-
-    // Vérifier toutes les 100ms
-    if (now - lastHotspotCheck < 100) {
-      requestAnimationFrame(checkAutoSwitch);
-      return;
-    }
-    lastHotspotCheck = now;
-
-    // Log toutes les 500ms
-    if (now - autoSwitchStartTime > 500 && (now - autoSwitchStartTime) % 500 < 100) {
-      var degrees = Math.round(rotationAccumulated * 180 / Math.PI);
-      var seconds = ((now - autoSwitchStartTime) / 1000).toFixed(1);
-      console.log('[' + scenes[currentSceneIndex].data.name + '] Rotation: ' + degrees + '° | Temps: ' + seconds + 's');
-    }
-
-    // Sécurité : forcer changement après 15 secondes
-    if (now - autoSwitchStartTime > 15000) {
-      console.log('⏰ Timeout 15s atteint, force changement');
-      var scene = scenes[currentSceneIndex];
-      var hotspots = scene.data.linkHotspots;
-      if (hotspots.length > 0) {
-        switchToScene(hotspots[0].target);
-        markPathExplored(scene.data.id, hotspots[0].target);
-      }
-      requestAnimationFrame(checkAutoSwitch);
-      return;
-    }
-
-    // Après 450° de rotation : chercher une flèche
-    if (rotationAccumulated >= 2.5 * Math.PI) {
-      var currentScene = scenes[currentSceneIndex];
-      var threshold = 1.2; // ~69° - tolérance large
-
-      var result = chooseBestHotspotWithBacktracking(currentScene, currentYaw, threshold);
-
-      if (result) {
-        if (result.needsBacktrack) {
-          // BACKTRACK : téléportation vers une pièce avec flèches non explorées
-          console.log('🚀 TÉLÉPORTATION vers : ' + result.backtrackTarget);
-          switchToScene(result.backtrackTarget);
-          // NE PAS marquer comme exploré (on ne suit pas une flèche)
-
-          // Vérifier si tous les chemins sont explorés
-          resetExplorationIfComplete();
-        } else if (result.hotspot) {
-          // Navigation normale via une flèche
-          var targetId = result.hotspot.target;
-          console.log('→ Changement: ' + currentScene.data.name + ' → ' + targetId);
-          switchToScene(targetId);
-          markPathExplored(currentScene.data.id, targetId);
-
-          // Vérifier si tous les chemins sont explorés
-          resetExplorationIfComplete();
+          updateSceneName(targetScene);
+          updateSceneList(targetScene);
+        }
+      },
+      onPathExplored: function(from, to, total) {
+        console.log('📝 Chemin exploré: ' + from + ' → ' + to);
+      },
+      onExplorationComplete: function(totalPaths, totalScenes) {
+        console.log('✅ Tous les chemins explorés (' + totalPaths + ') - RESET');
+      },
+      onBacktrack: function(from, to) {
+        console.log('🔙 BACKTRACK nécessaire vers : ' + to);
+      },
+      onTimeout: function(sceneId, time) {
+        console.log('⏰ Timeout ' + (time/1000) + 's atteint, force changement');
+      },
+      onRotationProgress: function(degrees, seconds, sceneId) {
+        var sceneName = scenes.find(function(s) { return s.data.id === sceneId; });
+        if (sceneName) {
+          console.log('[' + sceneName.data.name + '] Rotation: ' + degrees + '° | Temps: ' + seconds + 's');
         }
       }
-    }
+    };
 
-    requestAnimationFrame(checkAutoSwitch);
-  }
-
-  function startAutoSwitchTimer() {
-    stopAutoSwitchTimer();
-    // Réinitialiser les compteurs de rotation
-    rotationAccumulated = 0;
-    lastYaw = null;
-    lastHotspotCheck = 0;
-    autoSwitchStartTime = Date.now();
-
-    // Ajouter la pièce de départ à l'historique si c'est le début
-    if (visitedScenes.length === 0) {
-      var currentSceneId = scenes[currentSceneIndex].data.id;
-      visitedScenes.push(currentSceneId);
-      console.log('🏁 Démarrage depuis: ' + currentSceneId);
-    }
-
-    // Démarrer la boucle de vérification continue
-    requestAnimationFrame(checkAutoSwitch);
-  }
-
-  function stopAutoSwitchTimer() {
-    // Réinitialiser les compteurs
-    rotationAccumulated = 0;
-    lastYaw = null;
-    autoSwitchStartTime = 0;
+    autoExplorer = new AutoExplorer(viewer, scenes, autoExplorerConfig);
   }
 
   function startAutorotate() {
     if (!autorotateToggleElement.classList.contains('enabled')) {
       return;
     }
-    // Utiliser l'animation vidéo au lieu de l'autorotation basique
+
+    // Initialiser AutoExplorer si pas encore fait
+    if (!autoExplorer && typeof AutoExplorer !== 'undefined') {
+      initAutoExplorer();
+    }
+
+    // Démarrer l'animation vidéo
     if (videoAnimation) {
       videoAnimation.start();
-      startAutoSwitchTimer();
+    }
+
+    // Démarrer l'exploration automatique
+    if (autoExplorer) {
+      autoExplorer.start();
     }
   }
 
@@ -539,7 +328,11 @@
     // Arrêter l'animation vidéo
     if (videoAnimation) {
       videoAnimation.stop();
-      stopAutoSwitchTimer();
+    }
+
+    // Arrêter l'exploration automatique
+    if (autoExplorer) {
+      autoExplorer.stop();
     }
   }
 

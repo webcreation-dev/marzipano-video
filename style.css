@@ -828,3 +828,12 @@ body.view-control-buttons .viewControlButton {
 .viewControlButton-6 {
   margin-left: 105px;
 }
+
+/* Hide all UI elements */
+body.hide-ui #titleBar,
+body.hide-ui #sceneList,
+body.hide-ui #sceneListToggle,
+body.hide-ui #autorotateToggle,
+body.hide-ui #fullscreenToggle {
+  display: none !important;
+}
