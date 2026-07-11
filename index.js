@@ -111,7 +111,7 @@
   var videoAnimationConfig = {
     duration: 5000,         // Cycle de 5 secondes
     yawSpeed: 1.0,          // ROTATION plus douce (1.0 rad/sec = ~57°/sec)
-    pitchVariation: 0.12,   // Mouvements verticaux modérés
+    pitchVariation: 0,      // DÉSACTIVÉ - Pas de mouvements verticaux
     fovVariation: 0.08,     // Zoom subtil
     idleDelay: 2000,        // Reprise rapide après 2 secondes
     useEasing: false,       // Pas d'easing = mouvements plus brusques
